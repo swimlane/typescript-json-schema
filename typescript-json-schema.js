@@ -7,10 +7,21 @@ var __assign = (this && this.__assign) || Object.assign || function(t) {
     }
     return t;
 };
+Object.defineProperty(exports, "__esModule", { value: true });
 var glob = require("glob");
 var stringify = require("json-stable-stringify");
 var path = require("path");
 var ts = require("typescript");
+function safe(someObject, defaultValue) {
+    if (defaultValue === void 0) { defaultValue = {}; }
+    if (typeof someObject === "undefined" || someObject === null) {
+        return defaultValue;
+    }
+    else {
+        return someObject;
+    }
+}
+exports.safe = safe;
 var vm = require("vm");
 var REGEX_FILE_NAME = /".*"\./;
 var REGEX_TSCONFIG_NAME = /^.*\.json$/;
@@ -125,15 +136,15 @@ var JsonSchemaGenerator = (function () {
     };
     JsonSchemaGenerator.prototype.extractLiteralValue = function (typ) {
         if (typ.flags & ts.TypeFlags.EnumLiteral) {
-            var str = typ.text;
+            var str = typ.value.toString();
             var num = parseFloat(str);
             return isNaN(num) ? str : num;
         }
         else if (typ.flags & ts.TypeFlags.StringLiteral) {
-            return typ.text;
+            return typ.value.toString();
         }
         else if (typ.flags & ts.TypeFlags.NumberLiteral) {
-            return parseFloat(typ.text);
+            return parseFloat(typ.value.toString());
         }
         else if (typ.flags & ts.TypeFlags.BooleanLiteral) {
             return typ.intrinsicName === "true";
@@ -157,7 +168,7 @@ var JsonSchemaGenerator = (function () {
             var elemTypes = tupleType.elementTypes || propertyType.typeArguments;
             var fixedTypes = elemTypes.map(function (elType) { return _this.getTypeDefinition(elType, tc); });
             definition.type = "array";
-            definition.items = fixedTypes;
+            definition.items = fixedTypes[0];
             definition.minItems = fixedTypes.length;
             definition.additionalItems = {
                 anyOf: fixedTypes
@@ -195,9 +206,15 @@ var JsonSchemaGenerator = (function () {
                         definition.enum = [value];
                     }
                     else if (symbol && (symbol.getName() === "Array" || symbol.getName() === "ReadonlyArray")) {
-                        var arrayType = propertyType.typeArguments[0];
-                        definition.type = "array";
-                        definition.items = this.getTypeDefinition(arrayType, tc);
+                        var typeArguments = propertyType.typeArguments;
+                        if (typeArguments) {
+                            var arrayType = typeArguments[0];
+                            definition.type = "array";
+                            definition.items = this.getTypeDefinition(arrayType, tc);
+                        }
+                        else {
+                            throw new TypeError("Property " + symbol.name + " is array but doesn't have type");
+                        }
                     }
                     else {
                         var info = propertyType;
@@ -261,10 +278,10 @@ var JsonSchemaGenerator = (function () {
         return definition;
     };
     JsonSchemaGenerator.prototype.getEnumDefinition = function (clazzType, tc, definition) {
-        var node = clazzType.getSymbol().getDeclarations()[0];
+        var node = safe(safe(clazzType.getSymbol()).getDeclarations())[0];
         var fullName = tc.typeToString(clazzType, undefined, ts.TypeFormatFlags.UseFullyQualifiedType);
         var members = node.kind === ts.SyntaxKind.EnumDeclaration ?
-            node.members :
+            node.members.map(function (member) { return member; }) :
             [node];
         var enumValues = [];
         var enumTypes = [];
@@ -399,7 +416,7 @@ var JsonSchemaGenerator = (function () {
     };
     JsonSchemaGenerator.prototype.getClassDefinition = function (clazzType, tc, definition) {
         var _this = this;
-        var node = clazzType.getSymbol().getDeclarations()[0];
+        var node = safe(safe(clazzType.getSymbol()).getDeclarations())[0];
         if (this.args.typeOfKeyword && node.kind === ts.SyntaxKind.FunctionType) {
             definition.typeof = "function";
             return definition;
@@ -456,9 +473,6 @@ var JsonSchemaGenerator = (function () {
             }
             if (this.args.defaultProps) {
                 definition.defaultProperties = [];
-            }
-            if (this.args.noExtraProps && definition.additionalProperties === undefined) {
-                definition.additionalProperties = false;
             }
             if (this.args.propOrder) {
                 var propertyOrder = props.reduce(function (order, prop) {
@@ -595,14 +609,14 @@ var JsonSchemaGenerator = (function () {
                     definition.title = fullTypeName;
                 }
             }
-            var node = symbol && symbol.getDeclarations() !== undefined ? symbol.getDeclarations()[0] : null;
+            var node = symbol && symbol.getDeclarations() !== undefined ? safe(symbol.getDeclarations())[0] : null;
             if (definition.type === undefined) {
                 if (typ.flags & ts.TypeFlags.Union) {
                     this.getUnionDefinition(typ, prop, tc, unionModifier, definition);
                 }
                 else if (typ.flags & ts.TypeFlags.Intersection) {
                     if (this.args.noExtraProps) {
-                        definition.additionalProperties = false;
+                        definition.additionalProperties = undefined;
                     }
                     var types = typ.types;
                     for (var i = 0; i < types.length; ++i) {
@@ -623,7 +637,7 @@ var JsonSchemaGenerator = (function () {
                 else if (node && (node.kind === ts.SyntaxKind.EnumDeclaration || node.kind === ts.SyntaxKind.EnumMember)) {
                     this.getEnumDefinition(typ, tc, definition);
                 }
-                else if (symbol && symbol.flags & ts.SymbolFlags.TypeLiteral && Object.keys(symbol.members).length === 0) {
+                else if (symbol && symbol.flags & ts.SymbolFlags.TypeLiteral && Object.keys(safe(symbol.members)).length === 0) {
                     definition.type = "object";
                     definition.properties = {};
                 }
@@ -684,31 +698,31 @@ var JsonSchemaGenerator = (function () {
         }
         return [];
     };
+    JsonSchemaGenerator.validationKeywords = {
+        multipleOf: true,
+        maximum: true,
+        exclusiveMaximum: true,
+        minimum: true,
+        exclusiveMinimum: true,
+        maxLength: true,
+        minLength: true,
+        pattern: true,
+        maxItems: true,
+        minItems: true,
+        uniqueItems: true,
+        maxProperties: true,
+        minProperties: true,
+        additionalProperties: true,
+        enum: true,
+        type: true,
+        ignore: true,
+        description: true,
+        format: true,
+        default: true,
+        $ref: true
+    };
     return JsonSchemaGenerator;
 }());
-JsonSchemaGenerator.validationKeywords = {
-    multipleOf: true,
-    maximum: true,
-    exclusiveMaximum: true,
-    minimum: true,
-    exclusiveMinimum: true,
-    maxLength: true,
-    minLength: true,
-    pattern: true,
-    maxItems: true,
-    minItems: true,
-    uniqueItems: true,
-    maxProperties: true,
-    minProperties: true,
-    additionalProperties: true,
-    enum: true,
-    type: true,
-    ignore: true,
-    description: true,
-    format: true,
-    default: true,
-    $ref: true
-};
 exports.JsonSchemaGenerator = JsonSchemaGenerator;
 function getProgramFromFiles(files, compilerOptions) {
     if (compilerOptions === void 0) { compilerOptions = {}; }
@@ -772,7 +786,7 @@ function buildGenerator(program, args) {
         diagnostics.forEach(function (diagnostic) {
             var message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
             if (diagnostic.file) {
-                var _a = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start), line = _a.line, character = _a.character;
+                var _a = diagnostic.file.getLineAndCharacterOfPosition(safe(diagnostic.start)), line = _a.line, character = _a.character;
                 console.error(diagnostic.file.fileName + " (" + (line + 1) + "," + (character + 1) + "): " + message);
             }
             else {
@@ -800,7 +814,7 @@ function generateSchema(program, fullTypeName, args) {
 }
 exports.generateSchema = generateSchema;
 function programFromConfig(configFileName) {
-    var result = ts.parseConfigFileTextToJson(configFileName, ts.sys.readFile(configFileName));
+    var result = ts.parseConfigFileTextToJson(configFileName, safe(ts.sys.readFile(configFileName)));
     var configObject = result.config;
     var configParseResult = ts.parseJsonConfigFileContent(configObject, ts.sys, path.dirname(configFileName), {}, configFileName);
     var options = configParseResult.options;

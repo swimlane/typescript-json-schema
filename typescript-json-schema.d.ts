@@ -1,4 +1,5 @@
 import * as ts from "typescript";
+export declare function safe<T>(someObject: T | undefined, defaultValue?: T): T;
 export declare function getDefaultArgs(): Args;
 export declare type ValidationKeywords = {
     [prop: string]: boolean;
@@ -35,7 +36,7 @@ export declare type Definition = {
     items?: Definition;
     minItems?: number;
     additionalItems?: {
-        anyOf: Definition;
+        anyOf: Definition[];
     };
     enum?: PrimitiveType[] | Definition[];
     default?: PrimitiveType | Object;

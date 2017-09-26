@@ -3,6 +3,15 @@ import * as stringify from "json-stable-stringify";
 import * as path from "path";
 import * as ts from "typescript";
 
+/* tslint:disable:no-object-literal-type-assertion */
+export function safe<T>(someObject: T | undefined, defaultValue: T = <T>{}): T {
+    if (typeof someObject === "undefined" || someObject === null) {
+      return defaultValue;
+    } else {
+      return someObject;
+    }
+  }
+  /* tslint:enable */
 
 const vm = require("vm");
 
@@ -65,7 +74,7 @@ export type Definition = {
     items?: Definition,
     minItems?: number,
     additionalItems?: {
-        anyOf: Definition
+        anyOf: Definition[]
     },
     enum?: PrimitiveType[] | Definition[],
     default?: PrimitiveType | Object,
@@ -205,7 +214,7 @@ export class JsonSchemaGenerator {
     /**
      * Parse the comments of a symbol into the definition and other annotations.
      */
-    private parseCommentsIntoDefinition(symbol: ts.Symbol, definition: {description?: string}, otherAnnotations: {}): void {
+    private parseCommentsIntoDefinition(symbol: ts.Symbol | undefined, definition: {description?: string}, otherAnnotations: {}): void {
         if (!symbol) {
             return;
         }
@@ -233,13 +242,13 @@ export class JsonSchemaGenerator {
 
     private extractLiteralValue(typ: ts.Type): PrimitiveType | undefined {
         if (typ.flags & ts.TypeFlags.EnumLiteral) {
-            let str = (<ts.LiteralType>typ).text;
+            let str = (<ts.LiteralType>typ).value.toString();
             let num = parseFloat(str);
             return isNaN(num) ? str : num;
         } else if (typ.flags & ts.TypeFlags.StringLiteral) {
-            return (<ts.LiteralType>typ).text;
+            return (<ts.LiteralType>typ).value.toString();
         } else if (typ.flags & ts.TypeFlags.NumberLiteral) {
-            return parseFloat((<ts.LiteralType>typ).text);
+            return parseFloat((<ts.LiteralType>typ).value.toString());
         } else if (typ.flags & ts.TypeFlags.BooleanLiteral) {
             return (typ as any).intrinsicName === "true";
         }
@@ -268,7 +277,7 @@ export class JsonSchemaGenerator {
             const elemTypes: ts.NodeArray<ts.TypeNode> = tupleType.elementTypes || (propertyType as any).typeArguments;
             const fixedTypes = elemTypes.map(elType => this.getTypeDefinition(elType as any, tc));
             definition.type = "array";
-            definition.items = fixedTypes;
+            definition.items = fixedTypes[0];
             definition.minItems = fixedTypes.length;
             definition.additionalItems = {
                 anyOf: fixedTypes
@@ -306,9 +315,14 @@ export class JsonSchemaGenerator {
                         definition.type = typeof value;
                         definition.enum = [ value ];
                     } else if (symbol && (symbol.getName() === "Array" || symbol.getName() === "ReadonlyArray")) {
-                        const arrayType = (<ts.TypeReference>propertyType).typeArguments[0];
+                        const typeArguments: ts.Type[] | undefined =  (<ts.TypeReference>propertyType).typeArguments;
+                        if(typeArguments) {
+                            const arrayType = typeArguments[0];
                         definition.type = "array";
                         definition.items = this.getTypeDefinition(arrayType, tc);
+                        } else {
+                            throw new TypeError(`Property ${symbol.name} is array but doesn't have type`);
+                        }
                     } else {
                         // Report that type could not be processed
                         let info: any = propertyType;
@@ -379,10 +393,10 @@ export class JsonSchemaGenerator {
     }
 
     private getEnumDefinition(clazzType: ts.Type, tc: ts.TypeChecker, definition: Definition): Definition {
-        const node = clazzType.getSymbol().getDeclarations()[0];
+        const node = safe(safe(clazzType.getSymbol()).getDeclarations())[0];
         const fullName = tc.typeToString(clazzType, undefined, ts.TypeFormatFlags.UseFullyQualifiedType);
         const members: ts.EnumMember[] = node.kind === ts.SyntaxKind.EnumDeclaration ?
-            (node as ts.EnumDeclaration).members :
+            (node as ts.EnumDeclaration).members.map(member => member) :
             [node as ts.EnumMember];
         var enumValues: (number|boolean|string|null)[] = [];
         let enumTypes: string[] = [];
@@ -524,7 +538,7 @@ export class JsonSchemaGenerator {
     }
 
     private getClassDefinition(clazzType: ts.Type, tc: ts.TypeChecker, definition: Definition): Definition {
-        const node = clazzType.getSymbol().getDeclarations()[0];
+        const node = safe(safe(clazzType.getSymbol()).getDeclarations())[0];
         if (this.args.typeOfKeyword && node.kind === ts.SyntaxKind.FunctionType) {
             definition.typeof = "function";
             return definition;
@@ -590,9 +604,6 @@ export class JsonSchemaGenerator {
 
             if (this.args.defaultProps) {
                 definition.defaultProperties = [];
-            }
-            if (this.args.noExtraProps && definition.additionalProperties === undefined) {
-                definition.additionalProperties = false;
             }
             if (this.args.propOrder) {
                 // propertyOrder is non-standard, but useful:
@@ -759,7 +770,7 @@ export class JsonSchemaGenerator {
                     definition.title = fullTypeName;
                 }
             }
-            const node = symbol && symbol.getDeclarations() !== undefined ? symbol.getDeclarations()[0] : null;
+            const node = symbol && symbol.getDeclarations() !== undefined ? safe(symbol.getDeclarations())[0] : null;
 
             if (definition.type === undefined) {  // if users override the type, do not try to infer it
                 if (typ.flags & ts.TypeFlags.Union) {
@@ -767,7 +778,7 @@ export class JsonSchemaGenerator {
                 } else if (typ.flags & ts.TypeFlags.Intersection) {
                     // extend object instead of using allOf because allOf does not work well with additional properties. See #107
                     if (this.args.noExtraProps) {
-                        definition.additionalProperties = false;
+                        definition.additionalProperties = undefined;
                     }
 
                     const types = (<ts.IntersectionType> typ).types;
@@ -786,7 +797,7 @@ export class JsonSchemaGenerator {
                     this.getDefinitionForRootType(typ, tc, reffedType!, definition);
                 } else if (node && (node.kind === ts.SyntaxKind.EnumDeclaration || node.kind === ts.SyntaxKind.EnumMember)) {
                     this.getEnumDefinition(typ, tc, definition);
-                } else if (symbol && symbol.flags & ts.SymbolFlags.TypeLiteral && Object.keys(symbol.members).length === 0) {
+                } else if (symbol && symbol.flags & ts.SymbolFlags.TypeLiteral && Object.keys(safe(symbol.members)).length === 0) {
                     // {} is TypeLiteral with no members. Need special case because it doesn't have declarations.
                     definition.type = "object";
                     definition.properties = {};
@@ -935,7 +946,7 @@ export function buildGenerator(program: ts.Program, args: PartialArgs = {}): Jso
         diagnostics.forEach((diagnostic) => {
             let message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
             if(diagnostic.file) {
-                let { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+                let { line, character } = diagnostic.file.getLineAndCharacterOfPosition(safe(diagnostic.start));
                 console.error(`${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message}`);
             } else {
                 console.error(message);
@@ -963,7 +974,7 @@ export function generateSchema(program: ts.Program, fullTypeName: string, args: 
 
 export function programFromConfig(configFileName: string): ts.Program {
     // basically a copy of https://github.com/Microsoft/TypeScript/blob/3663d400270ccae8b69cbeeded8ffdc8fa12d7ad/src/compiler/tsc.ts -> parseConfigFile
-    const result = ts.parseConfigFileTextToJson(configFileName, ts.sys.readFile(configFileName));
+    const result = ts.parseConfigFileTextToJson(configFileName, safe(ts.sys.readFile(configFileName)));
     const configObject = result.config;
 
     const configParseResult = ts.parseJsonConfigFileContent(configObject, ts.sys, path.dirname(configFileName), {}, configFileName);

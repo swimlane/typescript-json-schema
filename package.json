@@ -40,7 +40,7 @@
   "dependencies": {
     "glob": "~7.1.2",
     "json-stable-stringify": "^1.0.1",
-    "typescript": "~2.1.5",
+    "typescript": "~2.5.2",
     "yargs": "^8.0.1"
   },
   "devDependencies": {
