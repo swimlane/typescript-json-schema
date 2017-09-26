@@ -1,5 +1,10 @@
 # typescript-json-schema
 
+## Important
+
+This is a branch, that uses newer Typescript as dependency. That's why everything else still points to original.
+
+
 [![npm version](https://img.shields.io/npm/v/typescript-json-schema.svg)](https://www.npmjs.com/package/typescript-json-schema) [![Build Status](https://travis-ci.org/YousefED/typescript-json-schema.svg?branch=master)](https://travis-ci.org/YousefED/typescript-json-schema)
 
 Generate json-schemas from your Typescript sources.
